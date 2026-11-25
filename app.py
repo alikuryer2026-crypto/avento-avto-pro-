@@ -5,7 +5,12 @@ from werkzeug.security import check_password_hash
 app=Flask(__name__)
 app.secret_key=os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_SECURE=True,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax")
-def db(): return psycopg.connect(os.environ["DATABASE_URL"])
+def db():
+ c=psycopg.connect(os.environ["DATABASE_URL"])
+ with c.transaction():
+  c.execute("SELECT pg_advisory_xact_lock(872314)")
+  c.execute(open(os.path.join(os.path.dirname(__file__),"schema.sql")).read())
+ return c
 def page(body,**kw):
  return render_template_string("""<!doctype html><html lang="uz"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AVENTO AVTO PRO</title><style>body{font:16px system-ui;background:#f1f4f8;color:#14243b;margin:0}header{background:#14243b;color:white;padding:20px}main{max-width:850px;margin:auto;padding:20px}input,select,button{box-sizing:border-box;width:100%;padding:12px;margin:5px 0;border:1px solid #bbb;border-radius:8px}button{background:#14243b;color:white}section{background:white;padding:16px;margin:12px 0;border-radius:12px}a{color:#24538a}</style><header>AVENTO AVTO PRO</header><main>"""+body+"</main></html>",**kw)
 @app.before_request
@@ -18,7 +23,7 @@ def health(): return 'OK'
 @app.route('/login',methods=['GET','POST'])
 def login():
  if request.method=='POST':
-  if request.form.get('email')==os.environ.get('ADMIN_EMAIL') and check_password_hash(os.environ.get('ADMIN_PASSWORD_HASH',''),request.form.get('password','')):
+  if request.form.get('email')==os.environ.get('ADMIN_EMAIL') and (check_password_hash(os.environ['ADMIN_PASSWORD_HASH'],request.form.get('password','')) if os.environ.get('ADMIN_PASSWORD_HASH') else bool(os.environ.get('ADMIN_PASSWORD')) and hmac.compare_digest(os.environ['ADMIN_PASSWORD'].encode(),request.form.get('password','').encode())):
    session.clear();session['admin']=True;session['csrf']=secrets.token_hex(32);return redirect('/')
   return 'Login yoki parol noto‘g‘ri',401
  return page('<section><h2>Kirish</h2><form method="post"><input name="email" type="email" required placeholder="Email"><input name="password" type="password" required placeholder="Parol"><button>Kirish</button></form></section>')
