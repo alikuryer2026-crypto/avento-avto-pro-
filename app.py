@@ -51,17 +51,27 @@ def home():
 def export_contract(id,fmt):
  from io import BytesIO
  from flask import send_file
- from openpyxl import Workbook
+ from openpyxl import load_workbook
  with db() as conn:
   r=conn.execute("SELECT c.id,c.created_at,v.model,v.vin,v.color,b.full_name,b.passport,b.jshshir,b.phone,c.seller_phone,c.net,c.vat,c.total FROM contracts c JOIN vehicles v ON v.id=c.vehicle_id JOIN customers b ON b.id=c.customer_id WHERE c.id=%s",(id,)).fetchone()
  if not r: abort(404)
  labels=['Raqam','Sana','Model','VIN','Rang','Xaridor','Pasport','JSHSHIR','Xaridor telefoni','Sotuvchi telefoni','QQSsiz narx','QQS','Jami']
  rows=list(zip(labels,[str(x) if x is not None else '' for x in r]))
  if fmt=='xlsx':
-  w=Workbook();s=w.active;s.title='Sotuv ma’lumotlari';s.append(['AVENTO AVTO — sotuv ma’lumotlari']);s.append(['Shartnoma emas'])
-  for k,v in rows:
-   s.append([k,v]);s.cell(s.max_row,2).data_type='s'
-  s.column_dimensions['A'].width=25;s.column_dimensions['B'].width=45
+  w=load_workbook(os.path.join(os.path.dirname(__file__),'avento-2.xlsx'))
+  keys=['contract_number','contract_date','model','vin','color','buyer_name','passport','pinfl','buyer_phone','seller_phone','net_price','vat','total_price']
+  values=dict(zip(keys,r));values['contract_number']=f'{id:06d}';values['contract_date']=r[1].strftime('%d.%m.%Y')
+  for alias,key in {'contract_no':'contract_number','date':'contract_date','car_model':'model','car_color':'color','jshshir':'pinfl','price_without_vat':'net_price','vat_amount':'vat','total':'total_price'}.items(): values[alias]=values[key]
+  count=0
+  for s in w.worksheets:
+   for row in s.iter_rows():
+    for cell in row:
+     if not isinstance(cell.value,str): continue
+     for key,value in values.items():
+      token='{{'+key+'}}'
+      if token in cell.value:
+       cell.value=cell.value.replace(token,str(value if value is not None else ''));cell.data_type='s';count+=1
+  if not count: return 'Shablonda avtomatik to‘ldirish belgilari topilmadi. Shartnoma eksport qilinmadi.',422
   out=BytesIO();w.save(out);out.seek(0)
   return send_file(out,as_attachment=True,download_name=f'avento-{id}.xlsx')
  if fmt=='print':
