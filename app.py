@@ -10,6 +10,8 @@ def db():
  with c.transaction():
   c.execute("SELECT pg_advisory_xact_lock(872314)")
   c.execute(open(os.path.join(os.path.dirname(__file__),"schema.sql")).read())
+  c.execute("ALTER TABLE contracts ADD COLUMN IF NOT EXISTS seller_phone text")
+ c.commit()
  return c
 def page(body,**kw):
  return render_template_string("""<!doctype html><html lang="uz"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AVENTO AVTO PRO</title><style>body{font:16px system-ui;background:#f1f4f8;color:#14243b;margin:0}header{background:#14243b;color:white;padding:20px}main{max-width:850px;margin:auto;padding:20px}input,select,button{box-sizing:border-box;width:100%;padding:12px;margin:5px 0;border:1px solid #bbb;border-radius:8px}button{background:#14243b;color:white}section{background:white;padding:16px;margin:12px 0;border-radius:12px}a{color:#24538a}</style><header>AVENTO AVTO PRO</header><main>"""+body+"</main></html>",**kw)
@@ -37,10 +39,31 @@ def home():
    elif f['action']=='sale':
     v=c.execute("SELECT price FROM vehicles WHERE id=%s AND status='available' FOR UPDATE",(f['vehicle'],)).fetchone()
     if not v: abort(409)
-    c.execute("INSERT INTO contracts(vehicle_id,customer_id,total) VALUES(%s,%s,%s)",(f['vehicle'],f['customer'],v[0]))
+    c.execute("INSERT INTO contracts(vehicle_id,customer_id,total,seller_phone) VALUES(%s,%s,%s,%s)",(f['vehicle'],f['customer'],v[0],f['seller_phone']))
     c.execute("UPDATE vehicles SET status='sold' WHERE id=%s",(f['vehicle'],))
    return redirect('/')
   vehicles=c.execute("SELECT id,model,vin,price,status FROM vehicles ORDER BY id DESC").fetchall()
   customers=c.execute("SELECT id,full_name FROM customers ORDER BY id DESC").fetchall()
   contracts=c.execute("SELECT id,total,vat,created_at FROM contracts ORDER BY id DESC").fetchall()
- return page("""<section><h2>Avtomobillar ombori</h2><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="action" value="vehicle"><input name="model" placeholder="Model" required><input name="vin" placeholder="VIN" required><input name="color" placeholder="Rang"><input name="price" type="number" min="0" required placeholder="Narx (UZS)"><button>Avtomobil qo‘shish</button></form>{% for v in vehicles %}<p>{{v[1]}} · {{v[2]}} · {{v[3]}} · {{v[4]}}</p>{% endfor %}</section><section><h2>Xaridorlar</h2><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="action" value="customer"><input name="name" required placeholder="F.I.Sh."><input name="passport" placeholder="Pasport"><input name="jshshir" pattern="[0-9]{14}" placeholder="JSHSHIR"><input name="phone" placeholder="Telefon"><button>Saqlash</button></form></section><section><h2>Shartnoma</h2><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="action" value="sale"><select name="vehicle" required>{% for v in vehicles if v[4]=='available' %}<option value="{{v[0]}}">{{v[1]}} {{v[2]}}</option>{% endfor %}</select><select name="customer" required>{% for c in customers %}<option value="{{c[0]}}">{{c[1]}}</option>{% endfor %}</select><button>Sotuvni tasdiqlash</button></form></section><section><h2>Arxiv</h2>{% for c in contracts %}<p>№{{c[0]}} · {{c[1]}} UZS · QQS {{c[2]}}</p>{% endfor %}</section>""",csrf=session['csrf'],vehicles=vehicles,customers=customers,contracts=contracts)
+ return page("""<section><h2>Avtomobillar ombori</h2><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="action" value="vehicle"><input name="model" placeholder="Model" required><input name="vin" placeholder="VIN" required><input name="color" placeholder="Rang"><input name="price" type="number" min="0" required placeholder="Narx (UZS)"><button>Avtomobil qo‘shish</button></form>{% for v in vehicles %}<p>{{v[1]}} · {{v[2]}} · {{v[3]}} · {{v[4]}}</p>{% endfor %}</section><section><h2>Xaridorlar</h2><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="action" value="customer"><input name="name" required placeholder="F.I.Sh."><input name="passport" placeholder="Pasport"><input name="jshshir" pattern="[0-9]{14}" placeholder="JSHSHIR"><input name="phone" type="tel" required placeholder="Xaridor telefoni"><button>Saqlash</button></form></section><section><h2>Shartnoma</h2><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="action" value="sale"><select name="vehicle" required>{% for v in vehicles if v[4]=='available' %}<option value="{{v[0]}}">{{v[1]}} {{v[2]}}</option>{% endfor %}</select><select name="customer" required>{% for c in customers %}<option value="{{c[0]}}">{{c[1]}}</option>{% endfor %}</select><input name="seller_phone" type="tel" required value="+998 94 926 00 34" placeholder="Sotuvchi telefoni"><button>Sotuvni tasdiqlash</button></form></section><section><h2>Arxiv</h2>{% for c in contracts %}<p>№{{c[0]}} · {{c[1]}} UZS · QQS {{c[2]}} · <a href="/contract/{{c[0]}}/xlsx">Excel</a> · <a href="/contract/{{c[0]}}/print">Chop etish / PDF</a></p>{% endfor %}</section>""",csrf=session['csrf'],vehicles=vehicles,customers=customers,contracts=contracts)
+
+@app.get('/contract/<int:id>/<fmt>')
+def export_contract(id,fmt):
+ from io import BytesIO
+ from flask import send_file
+ from openpyxl import Workbook
+ with db() as conn:
+  r=conn.execute("SELECT c.id,c.created_at,v.model,v.vin,v.color,b.full_name,b.passport,b.jshshir,b.phone,c.seller_phone,c.net,c.vat,c.total FROM contracts c JOIN vehicles v ON v.id=c.vehicle_id JOIN customers b ON b.id=c.customer_id WHERE c.id=%s",(id,)).fetchone()
+ if not r: abort(404)
+ labels=['Raqam','Sana','Model','VIN','Rang','Xaridor','Pasport','JSHSHIR','Xaridor telefoni','Sotuvchi telefoni','QQSsiz narx','QQS','Jami']
+ rows=list(zip(labels,[str(x) if x is not None else '' for x in r]))
+ if fmt=='xlsx':
+  w=Workbook();s=w.active;s.title='Sotuv ma’lumotlari';s.append(['AVENTO AVTO — sotuv ma’lumotlari']);s.append(['Shartnoma emas'])
+  for k,v in rows:
+   s.append([k,v]);s.cell(s.max_row,2).data_type='s'
+  s.column_dimensions['A'].width=25;s.column_dimensions['B'].width=45
+  out=BytesIO();w.save(out);out.seek(0)
+  return send_file(out,as_attachment=True,download_name=f'avento-{id}.xlsx')
+ if fmt=='print':
+  return page('<h2>Sotuv ma’lumotlari №{{id}}</h2><p>Shartnoma emas</p>{% for k,v in rows %}<p><b>{{k}}</b>: {{v}}</p>{% endfor %}<button onclick="window.print()">Chop etish / PDF saqlash</button>',id=id,rows=rows)
+ abort(404)
